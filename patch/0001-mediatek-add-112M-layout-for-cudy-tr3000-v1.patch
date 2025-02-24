@@ -1,0 +1,79 @@
+From 13e49ec9487e4e8219e2b39101dddd784265df04 Mon Sep 17 00:00:00 2001
+From: zhz8888 <zhz1021@gmail.com>
+Date: Thu, 20 Feb 2025 16:19:48 +0800
+Subject: [PATCH] mediatek: add 112M layout for cudy tr3000 v1 This allows us
+ to use the 112M ubi size firmware, which is the most popular firmware size in
+ community.
+
+If you want to use this firmware, you can check this
+link to get more information, including new suitable for 112M ubi
+uboot and flash intstructions:
+https://www.right.com.cn/forum/thread-8411618-1-1.html
+
+Signed-off-by: zhz8888 <zhz1021@gmail.com>
+---
+ .../dts/mt7981b-cudy-tr3000-v1-112m.dts       | 26 +++++++++++++++++++
+ target/linux/mediatek/image/filogic.mk        | 17 ++++++++++++
+ 2 files changed, 43 insertions(+)
+ create mode 100644 target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-112m.dts
+
+diff --git a/target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-112m.dts b/target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-112m.dts
+new file mode 100644
+index 00000000000..9ef62398a68
+--- /dev/null
++++ b/target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-112m.dts
+@@ -0,0 +1,26 @@
++// SPDX-License-Identifier: (GPL-2.0 OR MIT)
++
++/dts-v1/;
++#include "mt7981b-cudy-tr3000-v1.dtsi"
++
++/ {
++	model = "Cudy TR3000 v1 112M";
++	compatible = "cudy,tr3000-v1-112m", "mediatek,mt7981";
++};
++
++&spi_nand {
++	spi-cal-enable;
++	spi-cal-mode = "read-data";
++	spi-cal-datalen = <7>;
++	spi-cal-data = /bits/ 8 <0x53 0x50 0x49 0x4E 0x41 0x4E 0x44>;
++	spi-cal-addrlen = <5>;
++	spi-cal-addr = /bits/ 32 <0x0 0x0 0x0 0x0 0x0>;
++
++	mediatek,nmbm;
++	mediatek,bmt-max-ratio = <1>;
++	mediatek,bmt-max-reserved-blocks = <64>;
++};
++
++&ubi {
++	reg = <0x5c0000 0x7000000>;
++};
+diff --git a/target/linux/mediatek/image/filogic.mk b/target/linux/mediatek/image/filogic.mk
+index b85be78de19..97d8c34f676 100644
+--- a/target/linux/mediatek/image/filogic.mk
++++ b/target/linux/mediatek/image/filogic.mk
+@@ -751,6 +751,23 @@ define Device/cudy_tr3000-v1-ubootmod
+ endef
+ TARGET_DEVICES += cudy_tr3000-v1-ubootmod
+ 
++define Device/cudy_tr3000-v1-112m
++  DEVICE_VENDOR := Cudy
++  DEVICE_MODEL := TR3000
++  DEVICE_VARIANT := v1 112M
++  DEVICE_DTS := mt7981b-cudy-tr3000-v1-112m
++  DEVICE_DTS_DIR := ../dts
++  SUPPORTED_DEVICES += R47
++  UBINIZE_OPTS := -E 5
++  BLOCKSIZE := 128k
++  PAGESIZE := 2048
++  IMAGE_SIZE := 65536k
++  KERNEL_IN_UBI := 1
++  IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
++  DEVICE_PACKAGES := kmod-usb3 kmod-mt7915e kmod-mt7981-firmware mt7981-wo-firmware automount
++endef
++TARGET_DEVICES += cudy_tr3000-v1-112m
++
+ define Device/cudy_wr3000-v1
+   DEVICE_VENDOR := Cudy
+   DEVICE_MODEL := WR3000

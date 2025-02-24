@@ -1,0 +1,170 @@
+#
+# Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
+#
+# This is free software, licensed under the MIT License.
+# See /LICENSE for more information.
+#
+# https://github.com/P3TERX/Actions-immortalwrt
+# Description: Build immortalwrt using GitHub Actions
+#
+
+name: Build immortalwrt
+
+on:
+  workflow_dispatch:
+    inputs:
+      REPO_URL:
+        description: "请输入要编译的源码仓库地址"
+        required: true
+        default: "https://github.com/immortalwrt/immortalwrt.git"
+      REPO_BRANCH:
+        type: choice
+        description: "请选择要编译的源码分支"
+        required: true
+        options:
+          - openwrt-24.10
+          - master
+        default: openwrt-24.10
+      CONFIG_FILE:
+        type: choice
+        description: "请选择要编译的配置文件"
+        required: true
+        options:
+          - tr3000-112m.config
+        default: tr3000-112m.config
+
+#  schedule:
+#    - cron: 0 8 */5 * *
+
+permissions:
+  contents: write
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@main
+
+    - name: Check Server Performance
+      run: |
+        echo "警告⚠"
+        echo "分配的服务器性能有限，若选择的插件过多，务必注意CPU性能！"
+        echo -e "已知CPU型号(降序): 7763，8370C，8272CL，8171M，E5-2673\n"
+        echo "--------------------------CPU信息--------------------------"
+        echo "CPU物理数量: $(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
+        echo "CPU核心数量: $(nproc)"
+        echo -e "CPU型号信息:$(cat /proc/cpuinfo | grep -m1 name | awk -F: '{print $2}')\n"
+        echo "--------------------------内存信息--------------------------"
+        echo "已安装内存详细信息:"
+        echo -e "$(sudo lshw -short -C memory | grep GiB)\n"
+        echo "--------------------------硬盘信息--------------------------"
+        echo "硬盘数量: $(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+
+    - name: Initialization environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        docker rmi $(docker images -q)
+        sudo rm -rf /usr/share/dotnet /etc/apt/sources.list.d /usr/local/lib/android $AGENT_TOOLSDIRECTORY
+        sudo -E apt-get -y purge azure-cli ghc* zulu* llvm* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
+        sudo -E apt-get -y update
+        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
+        sudo -E systemctl daemon-reload
+        sudo -E apt-get -y autoremove --purge
+        sudo -E apt-get -y clean
+        sudo timedatectl set-timezone "$TZ"
+        git config --global user.email ${{ github.actor }}@users.noreply.github.com
+        git config --global user.name "GitHub Actions"
+
+    - name: Clone source code
+      run: |
+        df -hT $GITHUB_WORKSPACE
+        df -hT /mnt
+        sudo mkdir -p /mnt/immortalwrt
+        sudo chown -R $USER:$USER /mnt/immortalwrt
+        git clone ${{ inputs.REPO_URL }} -b ${{ inputs.REPO_BRANCH }} --depth=1 /mnt/immortalwrt
+
+    - name: Load custom configuration
+      run: |
+        cp patch/0001-mediatek-add-112M-layout-for-cudy-tr3000-v1.patch /mnt/immortalwrt/0001-mediatek-add-112M-layout-for-cudy-tr3000-v1.patch
+        cp ${{ inputs.CONFIG_FILE }} /mnt/immortalwrt/.config
+        cd /mnt/immortalwrt
+        sed -i 's/192.168.1.1/192.168.100.1/g' package/base-files/files/bin/config_generate
+        git am 0001-mediatek-add-112M-layout-for-cudy-tr3000-v1.patch
+        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+        make defconfig > /dev/null 2>&1
+        SOURCE_REPO="$(echo "$REPO_URL" | awk -F '/' '{sub(/\/$/, ""); sub(/\.git$/, ""); print $NF}')"
+        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
+        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
+
+    - name: Cache Toolchain
+      uses: HiGarfield/cachewrtbuild@main
+      with:
+        ccache: false
+        mixkey: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
+        prefix: ${{ env.OPENWRT_PATH }}
+
+    - name: Update and insatll feeds
+      run: |
+        cd $OPENWRT_PATH
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Download package
+      run: |
+        cd $OPENWRT_PATH
+        make defconfig
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile the firmware
+      id: compile
+      run: |
+        cd $OPENWRT_PATH
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: Check space usage
+      if: (!cancelled())
+      run: df -hT
+
+    - name: Upload bin directory
+      uses: actions/upload-artifact@main
+      with:
+        name: immortalwrt_bin_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
+        path: $OPENWRT_PATH/bin
+
+    - name: Organize files
+      run: |
+        cd $OPENWRT_PATH/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Upload firmware directory
+      uses: actions/upload-artifact@main
+      with:
+        name: immortalwrt_firmware_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
+
+    - name: Upload firmware to release
+      uses: softprops/action-gh-release@master
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        name: CI ImmortalWrt-${{ inputs.REPO_BRANCH }}-Cudy-TR3000-v1-$(date +"%Y%m%d%H%M")
+        tag_name: ImmortalWrt-${{ inputs.REPO_BRANCH }}-Cudy-TR3000-v1-$(date +"%Y%m%d%H%M")
+        files: ${{ env.FIRMWARE }}/*
